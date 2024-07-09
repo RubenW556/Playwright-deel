@@ -1,0 +1,81 @@
+import java.text.SimpleDateFormat
+def dateFormat = new SimpleDateFormat("yyyyMMdd")
+def date = new Date()
+def timestamp = dateFormat.format(date)
+def PluginName = UUID.randomUUID().toString()+timestamp
+pipeline{
+    stages {
+        stage("Set-up"){
+            steps{
+                checkout scm
+                bat "echo ${PluginName}"
+                bat "dir"
+                bat "echo ${env.BRANCH_NAME}"
+                bat "echo %path%"
+                bat "npm --version"
+                bat "node --version"
+                bat "java -version"
+                bat "mvn --version"
+                dir("playwright"){
+                    bat "npm install"
+                    bat "npx playwright install"
+                }
+            }
+        }
+        stage("build"){
+            steps{
+                dir("java"){
+                    bat "mvn compile package"
+                }
+            }
+        }
+        stage('SonarQube analysis') {
+            steps{
+                script{
+                    scannerHome = tool 'SonarQube';
+                }
+                withSonarQubeEnv('SonarQube') {
+                  bat "${scannerHome}\\bin\\sonar-scanner.bat"
+                }
+            }
+        }
+        stage("test"){
+            when{
+                expression{"${env.environment}" !="main"}
+            }
+            steps{echo "no test"}
+        }
+        stage("deploy"){
+            when{
+                expression {"${env.environment}" == "main" || "${env.environment}" == "uat"}
+            }
+            steps{
+                dir("java/target"){
+                    bat "ren edsDataSourceSamplePlugin* ${PluginName}.jar"
+                    bat "echo y | pscp -pw ${env.Password} ${PluginName}.jar ${env.Username}@${env.Url}:C:\\Plug-ins\\${PluginName}.jar"
+                }
+                dir("playwright"){
+                    bat "node load-plug-in.js ${PluginName} ${env.Url} ${env.Username} ${env.Password}"
+                }
+            }
+        }
+        stage("e2e test"){
+            when{
+                expression {"${env.environment}" == "uat"}
+            }
+            steps{
+                dir("playwright"){
+                    script {
+                        try{
+                            bat "npm start"
+                        }catch(err){
+                            echo "tests failed"
+                        }
+                    }
+                    junit "results.xml"
+                }
+            }
+        }
+    }
+    agent any
+}
